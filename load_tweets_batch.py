@@ -38,41 +38,6 @@ def remove_nulls(s):
         return s.replace('\x00','')
 
 
-def get_id_urls(url, connection):
-    '''
-    Given a url, return the corresponding id in the urls table.
-    If no row exists for the url, then one is inserted automatically.
-
-    NOTE:
-    This function cannot be tested with standard python testing tools because it interacts with the db.
-    '''
-    sql = sqlalchemy.sql.text('''
-    insert into urls 
-        (url)
-        values
-        (:url)
-    on conflict do nothing
-    returning id_urls
-    ;
-    ''')
-    res = connection.execute(sql,{'url':url}).first()
-
-    # when no conflict occurs, then the query above inserts a new row in the url table and returns id_urls in res[0];
-    # when a conflict occurs, then the query above does not insert or return anything;
-    # we need to run a select statement to put the already existing id_urls into res[0]
-    if res is None:
-        sql = sqlalchemy.sql.text('''
-        select id_urls 
-        from urls
-        where
-            url=:url
-        ''')
-        res = connection.execute(sql,{'url':url}).first()
-
-    id_urls = res[0]
-    return id_urls
-
-
 def insert_tweet(connection,tweet):
     '''
     Insert the tweet into the database.
@@ -87,7 +52,7 @@ def insert_tweet(connection,tweet):
 
     # skip tweet if it's already inserted
     sql=sqlalchemy.sql.text('''
-    SELECT id_tweets 
+    SELECT id_tweets
     FROM tweets
     WHERE id_tweets = :id_tweets
     ''')
@@ -113,10 +78,11 @@ def insert_tweet(connection,tweet):
         ########################################
         # insert into the users table
         ########################################
-        if tweet['user']['url'] is None:
-            user_id_urls = None
-        else:
-            user_id_urls = get_id_urls(tweet['user']['url'], connection)
+
+        # NOTE:
+        # the urls table has been removed for the batch/parallel version,
+        # so the url text is now stored directly instead of a foreign key
+        user_url = tweet['user']['url']
 
         # create/update the user
         sql = sqlalchemy.sql.text('''
@@ -124,7 +90,7 @@ def insert_tweet(connection,tweet):
             id_users,
             created_at,
             updated_at,
-            id_urls,
+            url,
             friends_count,
             listed_count,
             favourites_count,
@@ -141,7 +107,7 @@ def insert_tweet(connection,tweet):
             :id_users,
             :created_at,
             :updated_at,
-            :id_urls,
+            :url,
             :friends_count,
             :listed_count,
             :favourites_count,
@@ -157,7 +123,7 @@ def insert_tweet(connection,tweet):
         ON CONFLICT (id_users) DO UPDATE SET
             created_at            = :created_at,
             updated_at            = :updated_at,
-            id_urls               = :id_urls,
+            url                   = :url,
             friends_count         = :friends_count,
             listed_count          = :listed_count,
             favourites_count      = :favourites_count,
@@ -176,7 +142,7 @@ def insert_tweet(connection,tweet):
             'id_users':tweet['user']['id'],
             'created_at':tweet['user']['created_at'],
             'updated_at':tweet['created_at'],
-            'id_urls':user_id_urls,
+            'url':user_url,
             'friends_count':tweet['user']['friends_count'],
             'listed_count':tweet['user']['listed_count'],
             'favourites_count':tweet['user']['favourites_count'],
@@ -352,19 +318,19 @@ def insert_tweet(connection,tweet):
             urls = tweet['entities']['urls']
 
         for url in urls:
-            id_urls = get_id_urls(url['expanded_url'], connection)
+            expanded_url = url['expanded_url']
 
             sql=sqlalchemy.sql.text('''
             INSERT INTO tweet_urls
-                (id_tweets, id_urls)
+                (id_tweets, url)
                 VALUES
-                (:id_tweets, :id_urls)
+                (:id_tweets, :url)
             ON CONFLICT DO NOTHING
             ;
             ''')
             connection.execute(sql,{
                 'id_tweets':tweet['id'],
-                'id_urls':id_urls,
+                'url':expanded_url,
                 })
 
         ########################################
@@ -417,8 +383,8 @@ def insert_tweet(connection,tweet):
         ########################################
 
         try:
-            hashtags = tweet['extended_tweet']['entities']['hashtags'] 
-            cashtags = tweet['extended_tweet']['entities']['symbols'] 
+            hashtags = tweet['extended_tweet']['entities']['hashtags']
+            cashtags = tweet['extended_tweet']['entities']['symbols']
         except KeyError:
             hashtags = tweet['entities']['hashtags']
             cashtags = tweet['entities']['symbols']
@@ -452,18 +418,18 @@ def insert_tweet(connection,tweet):
                 media = []
 
         for medium in media:
-            id_urls = get_id_urls(medium['media_url'], connection)
+            media_url = medium['media_url']
             sql=sqlalchemy.sql.text('''
             INSERT INTO tweet_media
-                (id_tweets, id_urls, type)
+                (id_tweets, url, type)
                 VALUES
-                (:id_tweets, :id_urls, :type)
+                (:id_tweets, :url, :type)
             ON CONFLICT DO NOTHING
             ;
             ''')
             connection.execute(sql,{
                 'id_tweets':tweet['id'],
-                'id_urls':id_urls,
+                'url':media_url,
                 'type':medium['type'],
                 })
 
@@ -472,7 +438,7 @@ def insert_tweet(connection,tweet):
 ################################################################################
 
 if __name__ == '__main__':
-    
+
     # process command line args
     import argparse
     parser = argparse.ArgumentParser()
@@ -492,7 +458,7 @@ if __name__ == '__main__':
     # we reverse sort the filenames because this results in fewer updates to the users table,
     # which prevents excessive dead tuples and autovacuums
     for filename in sorted(args.inputs, reverse=True):
-        with zipfile.ZipFile(filename, 'r') as archive: 
+        with zipfile.ZipFile(filename, 'r') as archive:
             print(datetime.datetime.now(),filename)
             for subfilename in sorted(archive.namelist(), reverse=True):
                 with io.TextIOWrapper(archive.open(subfilename)) as f:
