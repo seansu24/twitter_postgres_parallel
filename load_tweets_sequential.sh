@@ -1,5 +1,8 @@
 #!/bin/bash
 
+NORMALIZED_DB='postgresql://postgres:pass@localhost:3146/postgres'
+DENORMALIZED_DB='postgresql://postgres:pass@localhost:2146/postgres'
+
 files=$(find data/*)
 
 echo '================================================================================'
@@ -23,5 +26,5 @@ echo '==========================================================================
 echo 'load pg_normalized_batch'
 echo '================================================================================'
 time for file in $files; do
-    python3 -u load_tweets_batch.py --db=postgresql://postgres:pass@localhost:3/ --inputs $file
+    python3 -u load_tweets_batch.py --db=postgresql://postgres:pass@localhost:4146/postgres --inputs $file
 done
